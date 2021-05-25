@@ -1,49 +1,130 @@
 ---
-title: "DSC161 Midterm"
+title: "United Nations General Debates Text Analysis: Isreal vs. Palestine"
 output: pdf_document
 ---
+
+## Load required packages
+
 ```{r}
+#loading the packages
 library(tidyverse)
 library(tokenizers)
 library(quanteda)
 library(quanteda.textplots)
+```
+```{r}
+#install.packages("stm")
+library(stm)
+#install.packages("seededlda")
+library(seededlda)
+```
 
+## Load the dataset
+
+Load the United Nations General Debates dataset, take a peak of its top 5 rows.
+
+```{r}
 metadata <- read_csv("UNGDspeeches.csv")
-metadata
+head(metadata)
+```
+Data exploration is done in another notebook (python) on distribution of speeches/document over years,
+and speeches by Israel and Palestine.
+
+However, we will seperate Israel by the date 1998, because it is the date when Palestine first joined the United Nations.
+
+```{r}
+for (i in 1:nrow(metadata)){
+  #if the country is israel
+  if (metadata[i, ]$country == 'ISR'){
+    if (metadata[i, ]$year < 1998) {
+      metadata[i, 'country'] = 'ISR_prev_1998'
+    } else {
+      metadata[i, 'country'] = 'ISR_post_1998'
+    }
+  }
+}
 ```
 
 
-```{r}
-corpus_sotu <- corpus(metadata, text_field = "text")
-toks <- corpus_sotu %>%
-  tokens()
-dfm <- dfm(toks)
-dfm
-```
+## Create document frequency matrix
 
 ```{r}
-toks <- tokens(corpus_sotu, remove_punct = TRUE, remove_numbers=TRUE)
-toks <- tokens_wordstem(toks)
-toks <- tokens_select(toks,  stopwords("en"), selection = "remove")
-dfm <- dfm(toks)
-dfm
+#use quanteda to turn the data into a corpus
+corpus_un <- corpus(metadata, text_field = "text")
+toks_un <- tokens(corpus_un)
+dfm_un <- dfm(toks_un)
+dfm_un
 ```
+
+Corpus `corpus_un` consisting of 8,093 documents and 3 docvars;
+
+Tokens `toks_un` consisting of 8,093 documents and 3 docvars.
+
+dfm_un is a Document-feature matrix of: 8,093 documents, 51,006 features (98.65% sparse) and 3 docvars.
+
+Words such as "I", "to" should not be included: we need to retokenize the corpus to have punctuation, numbers, stemwords and stopwords removed:
+
 ```{r}
-dfm_trimmed <- dfm_trim(dfm, min_docfreq = 0.05, docfreq_type = "prop")
+toks_un <- tokens(corpus_un, remove_punct = TRUE, remove_numbers=TRUE)
+toks_un <- tokens_wordstem(toks_un)
+toks_un <- tokens_select(toks_un,  stopwords("en"), selection = "remove")
+dfm_un <- dfm(toks_un)
+dfm_un
+```
+
+51006 features are too many for the analysis: reduce the number to 5% of it. Calling method dfm_trim from the quanteda package, and obtain a new document frequency matrix with 2471 features.
+```{r}
+dfm_trimmed <- dfm_trim(dfm_un, min_docfreq = 0.05, docfreq_type = "prop")
 dfm_trimmed
 #2,471 features
 ```
+
+## Most frequent word: visualization
+
+Generate a word cloud of all features that we selected, based on their word frequency.
+
 ```{r}
+#all word based on their word frequency.
 textplot_wordcloud(dfm_trimmed, col="black")
-```
-```{r}
-#Subset dfm and meatadata to speech made by the US and Canada
-dfm_trimmed <- dfm_trimmed[metadata$country%in%c("PSE", "ISR"),]
-metadata <- metadata[metadata$country%in%c("PSE", "ISR"),]
 ```
 
 ```{r}
-#A different perspective: Fightin' words
+#Subset dfm and metadata to speech made by the Israel before 1998, after 1998, and Palestine.
+
+dfm_trimmed <- dfm_trimmed[metadata$country%in%c("PSE", "ISR_prev_1998", "ISR_post_1998"),]
+metadata <- metadata[metadata$country%in%c("PSE", "ISR_prev_1998", "ISR_post_1998"),]
+```
+
+
+Word Cloud of only Palestine.
+
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country == "PSE",], col="darkgreen")
+```
+Word Cloud of only Israel
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country%in%c("ISR_prev_1998", "ISR_post_1998"),])
+```
+Word Cloud of only Israel before 1998, when Palestine was not in the United nations.
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country=="ISR_prev_1998",],
+                   col = 'deepskyblue4')
+```
+Palestine joined the UN in 1998, print Word Cloud of only Israel after 1998:
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country=="ISR_post_1998",],
+                   col = 'dodgerblue4')
+```
+By directly observing the word cloud, we can see that the word "Iran" was more frequent after 1998.
+
+## Find distinctive words
+
+```{r}
+#DSC161 codes: Fightin' words
 clusterFightinWords <- function(dfm, clust.vect, alpha.0=100) {
   # we need to get the overall corpus word distribution and the cluster-specific words dists
   # y_{kw} in Monroe et al. 
@@ -63,11 +144,8 @@ clusterFightinWords <- function(dfm, clust.vect, alpha.0=100) {
   overall.term.odds <- 
     (overall.terms + prior.terms) / 
     (n + alpha.0 - overall.terms - prior.terms)
-```
-
-
-```{r}
-log.odds <- log(cluster.term.odds) - log(overall.term.odds)
+  
+  log.odds <- log(cluster.term.odds) - log(overall.term.odds)
   
   variance <- 1/(cluster.terms + prior.terms) + 1/(overall.terms + prior.terms)
   
@@ -79,66 +157,206 @@ log.odds <- log(cluster.term.odds) - log(overall.term.odds)
 ```
 
 ```{r}
-#Find words that are distinctive of Canada
+#Find words that are distinctive of Israel before 1998, after 1998, and Palestine
 
 #terms <- clusterFightinWords(dfm_trimmed, metadata$country=="ISR")
 #sort(terms, decreasing=T)[1:10]
 
 terms <- clusterFightinWords(dfm_trimmed, 
-                             (metadata$country=="ISR") & (metadata$year < 1998))
-sort(terms, decreasing=T)[1:20]
-```
-```{r}
-terms <- clusterFightinWords(dfm_trimmed, 
-                             (metadata$country=="ISR") & (metadata$year >= 1998))
-sort(terms, decreasing=T)[1:20]
+                             metadata$country=="ISR_prev_1998")
+sort(terms, decreasing=T)[1:10]
 ```
 
+The 10 most distinctive words for Israel's speech in before 1998 is: 
+
+- arab
+- soviet
+- negoti(ate)
+- egypt
+- propos(e)
+- middl(e)
+- boundari(y)
+- neighbor
+- jordan
+- war
+
+
 ```{r}
-#Find words that are distinctive of US
+terms <- clusterFightinWords(dfm_trimmed, 
+                             metadata$country=="ISR_post_1998")
+sort(terms, decreasing=T)[1:10]
+```
+
+The 10 most distinctive words for Israel's speech in after 1998 is: 
+
+- iran
+- nuclear
+- know
+- terror
+- israel
+- becaus(e)
+- get
+- global
+- world
+- want
+
+
+```{r}
+#Find words that are distinctive of PSE
 
 terms <- clusterFightinWords(dfm_trimmed, 
                              metadata$country=="PSE")
-sort(terms, decreasing=T)[1:20]
+sort(terms, decreasing=T)[1:10]
 
 ```
+
+The 10 most distinctive words for Israel's speech in after 1998 is: 
+
+- palestin
+- occup(y)
+- palestinian
+- occupi(y)
+- israeli
+- peopl(e)
+- continu(e)
+- intern
+- implement
+- resolut(ion)
+
 ```{r}
-#install.packages("stm")
-library(stm)
-#install.packages("seededlda")
-library(seededlda)
+dfm_trimmed
 ```
+
+
+## Topic Modelling
+
+### LDA:
+
+```{r}
+#LDA
+######
+#Run LDA using quanteda
+lda <- textmodel_lda(dfm_trimmed, k = 10)
+
+#Most likely term for each topic
+lda.terms <- terms(lda, 10)
+lda.terms
+
+#Topical content matrix
+mu <- lda$phi
+dim(mu) #10 topics, 5923 words
+mu[1:10,1:20]
+#Most representative words in Topic 1
+mu[1,][order(mu[1,], decreasing=T)][1:10]
+
+#Topical prevalence matrix
+pi <- lda$theta
+dim(pi) #number of docs by number of topics
+
+#Most representative documents in Topic 1
+metadata[order(pi[1,],decreasing=T),]
+```
+### STM
 
 ```{r}
 #STM
-#Process the data to put it in STM format.  Textprocessor automatically does preprocessing
+#Process the data to put it in STM format.Textprocessor() automatically does pre-processing
 temp <- textProcessor(documents=metadata$text,metadata=metadata)
-#prepDocuments removes words/docs that are now empty after preprocessing
+
+#prepDocuments() removes words/docs that are now empty after pre-processing
 out <- prepDocuments(temp$documents, temp$vocab, temp$meta)
 ```
-```{r}
-#Let's try to distinguish between topics that are spoken/written and by year
 
-#This takes a bit. You'd want to remove max.em.its -- this is just to make it shorter!
-#Here we are using prevalence covariate sotu_type and year
-model.stm <- stm(out$documents, out$vocab, K = 10, prevalence = ~country + s(year),
+
+```{r}
+#Let's try to distinguish between topics
+
+#number of topic
+num_topic = 5
+model.stm <- stm(out$documents, out$vocab, K = num_topic, prevalence = ~country + s(year),
                  data = out$meta, max.em.its = 10) 
+
 #Find most probable words in each topic
 labelTopics(model.stm)
-```
-```{r}
-#And most common topics
-plot(model.stm, n=10)
-```
-```{r}
-#Get representative documents
-#findThoughts(model.stm, texts=out$meta$year, topics=3, n=20)
-findThoughts(model.stm, texts=out$meta$country, topics=3, n=10)
-#findThoughts(model.stm, texts=out$meta$text, topics=10, n=10)
+
+#This takes a while to run!
 ```
 
 ```{r}
-model.stm.ee <- estimateEffect(1:10 ~ country + s(year), model.stm, meta = out$meta)
-plot(model.stm.ee, "year", method="continuous", topics=2)
+#And most common topics
+plot(model.stm)
+```
+
+
+```{r}
+topic_words =
+  c("palestinian, peac, state, peopl, will, intern, israel",
+ 	  "israel, iran, will, peac, year, peopl, nation",
+ 	  "peac, peopl, will, nation, new, palestinian, can ",
+ 	  "israel, arab, nation, peac, state, unit, will",
+ 	  "israel, peac, nation, will, negoti, state, unit"
+  )
+```
+
+Plot each topic vs. countries, and effect of the topic over the years.
+
+```{r fig1, fig.height = 8, fig.width = 15}
+model.stm.ee <- estimateEffect(1:num_topic ~ country + s(year), model.stm, meta = out$meta)
+
+dev.new(width=100, height=50, unit="in")
+plot(model.stm.ee, "country", main="Topic num vs. Countries")
+```
+
+```{r fig2, fig.height = 5, fig.width = 10}
+for (i in 1:num_topic){
+  #plot(model.stm.ee, "country")
+  plot(model.stm.ee, "year", method="continuous", topics=i, main = paste("Topic ", i, ": ", topic_words[i]))
+}
+```
+
+## Get representative document
+
+```{r}
+findThoughts(model.stm, texts=out$meta$year, topics=1, n=3)$docs
+```
+```{r}
+findThoughts(model.stm, texts=out$meta$country, topics=1, n=3)$docs
+```
+```{r}
+#findThoughts(model.stm, texts=out$meta$text, topics=i, n=1)$docs[1]
+```
+
+
+We can save the output document to a dataframe.
+
+
+```{r}
+df = data.frame(matrix(vector(), 0, 4,
+                dimnames=list(c(), c("Topic", "Year", "Country", "Text"))),
+                stringsAsFactors=T)
+```
+
+```{r}
+for (i in 1:num_topic){
+  
+  df[(i-1) * 10 + 1: (i * 10), "Topic"] = list(rep(i,10))
+  
+  df[(i-1) * 10 + 1: (i * 10), "Year"] = findThoughts(model.stm, texts=out$meta$year, topics=i, n=10)$docs
+  
+  df[(i-1) * 10 + 1: (i * 10), "Country"] = findThoughts(model.stm, texts=out$meta$country, topics=i, n=10)$docs
+  
+  df[(i-1) * 10 + 1: (i * 10), "Text"] = findThoughts(model.stm, texts=out$meta$text, topics=i, n=10)$docs
+  
+}
+```
+
+## Generate output dataframe with topics and document
+
+```{r}
+head(df, 2)
+```
+
+```{r}
+write.csv(df,'topic_model_output.csv', row.names = FALSE)
 ```
 
