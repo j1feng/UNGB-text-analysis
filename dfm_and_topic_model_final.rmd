@@ -1,0 +1,430 @@
+---
+title: "United Nations General Debates Text Analysis: Isreal vs. Palestine"
+output: pdf_document
+---
+
+## Selected Corpus
+
+UN General Debate Corpus, collected by Baturo, Dasandi, and Mikhaylov, containing all 8093 UN General Debate statements presented from 1970 to 2018, and their corresponding metadata.
+This corpus is great for our research questions because the nature of UNGD could allow smaller states to raise issues that they believe are important but received less attention. While other states could use GD as a way to influence international perceptions of their states and other states. Thus, we can observe the fairly accurate policy preferences of Israel and Palestine.
+
+## Research Question
+
+How did the policy preferences in UNGD of Israel change overtime? Is there a dramatic shift after Palestine joined the UNGD in 1998? Could the General Debates reflect the conflicts between Israel and Palestine?
+
+## Research Question Significance
+
+About two weeks ago, a serious armed conflict involving airstrikes and missile attacks broke out between Israel and Palestine. The enduring Israeli-Palestinian conflict made our group wonder whether their hostility were already embedded in their General Debates at the United Nation, and how their policy preferences changed over time. If we can find patterns in their speeches, we may understand their conflicts from a more comprehensive perspective. 
+
+## Related Study
+
+Jeremy Pressman (2020) ‘History in conflict: Israeli–Palestinian speeches at the United Nations, 1998–2016’, Mediterranean Politics, 25:4, 476-498, DOI: 10.1080/13629395.2019.1589936
+
+
+In this paper, Pressman studied the General Debate of both Israel and Palestine from 1998 to 2016, as the result Pressman found that the leaders of both countries covered similar issues. And both countries argued that they are the ones committing for peace, while accusing the other country of invasion. While this paper doesn’t use any topic modeling techniques and only include speeches until 2016, it still helped our research by providing background knowledge of the history of Israeli-Palestinian conflict, helping us interpret the results, and providing validation for our findings. 
+
+
+## Load required packages
+
+```{r}
+#loading the packages
+library(tidyverse)
+library(tokenizers)
+library(quanteda)
+library(quanteda.textplots)
+```
+```{r}
+#install.packages("stm")
+library(stm)
+#install.packages("seededlda")
+library(seededlda)
+```
+
+## Load the dataset
+
+Load the United Nations General Debates dataset, take a peak of its top 5 rows.
+
+```{r}
+metadata <- read_csv("UNGDspeeches.csv")
+head(metadata)
+```
+
+Data exploration is done in another notebook (python) on distribution of speeches/document over years,
+and speeches by Israel and Palestine.
+
+However, we will seperate Israel by the year 1998, because it is the year Palestine first joined the United Nations General Debates.
+
+```{r}
+for (i in 1:nrow(metadata)){
+  #if the country is israel
+  if (metadata[i, ]$country == 'ISR'){
+    if (metadata[i, ]$year < 1998) {
+      metadata[i, 'country'] = 'ISR_prev_1998'
+    } else {
+      metadata[i, 'country'] = 'ISR_post_1998'
+    }
+  }
+}
+```
+
+
+## Create document frequency matrix
+
+```{r}
+#use quanteda to turn the data into a corpus
+corpus_un <- corpus(metadata, text_field = "text")
+toks_un <- tokens(corpus_un)
+dfm_un <- dfm(toks_un)
+dfm_un
+```
+
+Corpus `corpus_un` consisting of 8,093 documents and 3 docvars;
+
+Tokens `toks_un` consisting of 8,093 documents and 3 docvars.
+
+dfm_un is a Document-feature matrix of: 8,093 documents, 51,006 features (98.65% sparse) and 3 docvars.
+
+Words such as "I", "to" should not be included: we need to retokenize the corpus to have punctuation, numbers, stemwords and stopwords removed:
+
+```{r}
+#remove punct, stopwords.. etc
+toks_un <- tokens(corpus_un, remove_punct = TRUE, remove_numbers=TRUE)
+toks_un <- tokens_wordstem(toks_un)
+toks_un <- tokens_select(toks_un,  stopwords("en"), selection = "remove")
+dfm_un <- dfm(toks_un)
+dfm_un
+```
+
+51006 features are too many for the analysis: reduce the number to include features appeared in at least 5% of documents. Calling method dfm_trim from the quanteda package, and obtain a new document frequency matrix with 2471 features.
+```{r}
+dfm_trimmed <- dfm_trim(dfm_un, min_docfreq = 0.05, docfreq_type = "prop")
+dfm_trimmed
+#2,471 features
+```
+
+## Most frequent word: visualization
+
+Generate a word cloud of all features that we selected, based on their word frequency.
+
+```{r}
+#all word based on their word frequency.
+textplot_wordcloud(dfm_trimmed, col="black")
+```
+
+```{r}
+#Subset dfm and metadata to speech made by the Israel before 1998, after 1998, and Palestine.
+
+dfm_trimmed <- dfm_trimmed[metadata$country%in%c("PSE", "ISR_prev_1998", "ISR_post_1998"),]
+metadata <- metadata[metadata$country%in%c("PSE", "ISR_prev_1998", "ISR_post_1998"),]
+```
+
+
+Word Cloud of only Palestine.
+
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country == "PSE",], col="darkgreen")
+```
+Word Cloud of only Israel
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country%in%c("ISR_prev_1998", "ISR_post_1998"),])
+```
+Word Cloud of only Israel before 1998, when Palestine was not in the United nations.
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country=="ISR_prev_1998",],
+                   col = 'deepskyblue4')
+```
+
+Palestine joined the UNDB in 1998, print Word Cloud of only Israel after 1998:
+
+```{r}
+textplot_wordcloud(dfm_trimmed[metadata$country=="ISR_post_1998",],
+                   col = 'dodgerblue4')
+```
+By directly observing the word cloud, we can see that the words "palestinian" and "Iran" appeared more frequently after 1998, while the word "arab" appeared less frequently. 
+
+## Find distinctive words
+
+```{r}
+#DSC161 codes: Fightin' words
+clusterFightinWords <- function(dfm, clust.vect, alpha.0=100) {
+  # we need to get the overall corpus word distribution and the cluster-specific words dists
+  # y_{kw} in Monroe et al. 
+  overall.terms <- colSums(dfm)
+  # n and n_k in Monroe et al. 
+  n <- sum(overall.terms)
+  # alpha_{kw} in Monroe et al. 
+  prior.terms <- overall.terms / n * alpha.0
+  # y_{kw}(i) in Monroe et al.
+  cluster.terms <- colSums(dfm[clust.vect, ])
+  # n_k(i) in Monroe et al.
+  cluster.n <- sum(cluster.terms)
+  
+  cluster.term.odds <- 
+    (cluster.terms + prior.terms) / 
+    (cluster.n + alpha.0 - cluster.terms - prior.terms)
+  overall.term.odds <- 
+    (overall.terms + prior.terms) / 
+    (n + alpha.0 - overall.terms - prior.terms)
+  
+  log.odds <- log(cluster.term.odds) - log(overall.term.odds)
+  
+  variance <- 1/(cluster.terms + prior.terms) + 1/(overall.terms + prior.terms)
+  
+  # return the variance weighted log-odds for each term
+  output <- log.odds / sqrt(variance)
+  names(output) <- colnames(dfm)
+  return(output)
+}
+```
+
+```{r}
+#Find words that are distinctive of Israel before 1998, after 1998, and Palestine
+
+#terms <- clusterFightinWords(dfm_trimmed, metadata$country=="ISR")
+#sort(terms, decreasing=T)[1:10]
+
+terms <- clusterFightinWords(dfm_trimmed, 
+                             metadata$country=="ISR_prev_1998")
+sort(terms, decreasing=T)[1:10]
+```
+
+The 10 most distinctive words for Israel's speech before 1998 are: 
+
+- arab
+- soviet
+- negoti(ate)
+- egypt
+- propos(e)
+- middl(e)
+- boundari(y)
+- neighbor
+- jordan
+- war
+
+
+```{r}
+terms <- clusterFightinWords(dfm_trimmed, 
+                             metadata$country=="ISR_post_1998")
+sort(terms, decreasing=T)[1:10]
+```
+
+The 10 most distinctive words for Israel's speech after 1998 are: 
+
+- iran
+- nuclear
+- know
+- terror
+- israel
+- becaus(e)
+- get
+- global
+- world
+- want
+
+
+```{r}
+#Find words that are distinctive of PSE
+
+terms <- clusterFightinWords(dfm_trimmed, 
+                             metadata$country=="PSE")
+sort(terms, decreasing=T)[1:10]
+
+```
+
+The 10 most distinctive words for Palestine's speech in after 1998 are: 
+
+- palestin
+- occup(y)
+- palestinian
+- occupi(y)
+- israeli
+- peopl(e)
+- continu(e)
+- intern
+- implement
+- resolut(ion)
+
+```{r}
+#dfm_trimmed
+```
+
+
+## Topic Modelling
+
+### LDA:
+
+```{r}
+#LDA
+######
+#Run LDA using quanteda
+lda <- textmodel_lda(dfm_trimmed, k = 5)
+
+#Most likely term for each topic
+lda.terms <- terms(lda, 5)
+lda.terms
+
+#Topical content matrix
+mu <- lda$phi
+dim(mu) #5 topics, 2741 words
+mu[1:5,1:10]
+```
+
+```{r}
+#Most representative words in Topic 1
+mu[1,][order(mu[1,], decreasing=T)][1:10]
+
+#Topical prevalence matrix
+pi <- lda$theta
+dim(pi) #number of docs by number of topics
+
+#Most representative documents in Topic 1
+metadata[order(pi[1,],decreasing=T),]
+```
+### STM
+
+#### Model Selection
+
+LDA vs. STM: we performed LDA as well as STM analysis, and we found that since STM can take in account of medata, which will be useful in further analysis with the help of representative documents, we choose to mainly use STM.
+
+#### Number of Topics
+
+To study the topics of statements of these two countries we decided to use 5 topics. Because we evaluated the results qualitatively, we found that if we use 10 topics there would be overlapped topics. Thus, 5 topics were best to answer our research questions.
+
+### STM Topic Model: 2 Topics with Just Israel
+
+Does Israel really changed its debate topic over the years? We can apply the STM model just on Israel to make sure that the arbitrary seperation of ISR at year 1998 is reasonable.
+
+We also need to make sure that the model converges to the optimum.
+
+```{r}
+isrmeta = metadata[metadata$country != "PSE", ] # Subset, only include Israeli documents
+isrtemp = textProcessor(documents = isrmeta$text, metadata = isrmeta) # Preprocessing
+isrout <- prepDocuments(isrtemp$documents, isrtemp$vocab, isrtemp$meta)
+isrmode <- stm(isrout$documents, isrout$vocab, K = 2, 
+               prevalence = ~s(year), data = isrout$meta) # Run STM
+```
+
+```{r}
+labelTopics(isrmode) # Interprete results 
+```
+
+```{r}
+isrmode.ee <- estimateEffect(1:2 ~ s(year), isrmode, meta = isrout$meta) # Estimate Effect
+plot(isrmode.ee, "year", method = "continuous", topics = 2) # Plot effect 
+abline(v = 1998)
+# text(locator(), labels = c("1998")) # Requires interaction
+```
+
+There is clearly change in topic after 1998, the year of interest. Now, we will perform our main analysis on these three groups: ISR before 1998, ISR after 1998, and Palestine, which joined the UNGB after 1998.
+
+## STM Main Analysis
+
+```{r}
+#STM
+#Process the data to put it in STM format.Textprocessor() automatically does pre-processing
+temp <- textProcessor(documents=metadata$text,metadata=metadata)
+
+#prepDocuments() removes words/docs that are now empty after pre-processing
+out <- prepDocuments(temp$documents, temp$vocab, temp$meta)
+```
+
+
+```{r}
+#Let's try to distinguish between topics
+
+#number of topic
+num_topic = 5
+model.stm <- stm(out$documents, out$vocab, K = num_topic, prevalence = ~country + s(year),
+                 data = out$meta) 
+```
+
+
+```{r}
+#Find most probable words in each topic
+labelTopics(model.stm)
+```
+
+```{r}
+
+#And most common topics
+plot(model.stm)
+```
+
+
+```{r}
+topic_words =
+  c("palestinian, peac, peopl, state, intern, will, israel",
+ 	  "israel, iran, will, peac, year, peopl, nation",
+ 	  "peac, peopl, will, nation, new, can, palestinian",
+ 	  "israel, arab, peac, state, nation, unit, agreement",
+ 	  "israel, peac, nation, will, unit, state, countri"
+  )
+```
+
+Plot each topic vs. countries, and effect of the topic over the years.
+
+```{r fig1, fig.height = 8, fig.width = 15}
+model.stm.ee <- estimateEffect(1:num_topic ~ country + s(year), model.stm, meta = out$meta)
+
+dev.new(width=100, height=50, unit="in")
+plot(model.stm.ee, "country", main="Topic num vs. Countries")
+```
+
+```{r fig2, fig.height = 5, fig.width = 10}
+for (i in 1:num_topic){
+  #plot(model.stm.ee, "country")
+  plot(model.stm.ee, "year", method="continuous", topics=i, main = paste("Topic ", i, ": ", topic_words[i]))
+}
+```
+
+## Get representative document
+
+```{r}
+findThoughts(model.stm, texts=out$meta$year, topics=1, n=3)$docs
+```
+```{r}
+findThoughts(model.stm, texts=out$meta$country, topics=1, n=3)$docs
+```
+```{r}
+#findThoughts(model.stm, texts=out$meta$text, topics=i, n=1)$docs[1]
+```
+
+
+We can save the output document to a dataframe.
+
+
+```{r}
+df = data.frame(matrix(vector(), 0, 5,
+                dimnames=list(c(), c("Topic", "Word", "Year", "Country", "Text"))),
+                stringsAsFactors=T)
+```
+
+```{r}
+for (i in 1:num_topic){
+  
+  df[(i-1) * 10 + 1: (i * 10), "Topic"] = list(rep(i,10))
+  
+  df[(i-1) * 10 + 1: (i * 10), "Word"] = topic_words[i]
+  
+  df[(i-1) * 10 + 1: (i * 10), "Year"] = findThoughts(model.stm, texts=out$meta$year, topics=i, n=10)$docs
+  
+  df[(i-1) * 10 + 1: (i * 10), "Country"] = findThoughts(model.stm, texts=out$meta$country, topics=i, n=10)$docs
+  
+  df[(i-1) * 10 + 1: (i * 10), "Text"] = findThoughts(model.stm, texts=out$meta$text, topics=i, n=10)$docs
+  
+}
+```
+
+## Generate output dataframe with topics and document
+
+```{r}
+head(df, 2)
+```
+
+```{r}
+write.csv(df,'topic_model_output.csv', row.names = FALSE)
+```
+
